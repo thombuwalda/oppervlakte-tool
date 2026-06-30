@@ -16,7 +16,9 @@ function berekenOppervlak(pts) {
   return Math.sqrt(opp[0] ** 2 + opp[1] ** 2 + opp[2] ** 2) / 2;
 }
 
-function richtingNaam(azimut) {
+function richtingNaam(azimut, helling) {
+  // Bij een (nagenoeg) plat dakvlak is oriëntatie niet relevant
+  if (helling != null && helling < 5) return "Plat dak";
   if (azimut == null) return "Onbekend";
   const richtingen = ["Noord", "Noordoost", "Oost", "Zuidoost", "Zuid", "Zuidwest", "West", "Noordwest"];
   const idx = Math.round(azimut / 45) % 8;
@@ -78,7 +80,7 @@ function parseCityJsonDakvlakken(feature, transform, gevraagdId) {
             oppervlak: Math.round(oppervlak * 10) / 10,
             azimut: azimut != null ? Math.round(azimut * 10) / 10 : null,
             helling: helling != null ? Math.round(helling * 10) / 10 : null,
-            richting: richtingNaam(azimut),
+            richting: richtingNaam(azimut, helling),
           });
         }
       }
