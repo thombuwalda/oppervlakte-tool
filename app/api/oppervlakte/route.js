@@ -1,52 +1,92 @@
 // app/api/oppervlakte/route.js
-// Server-side: haalt BAG adres + 3D dakvlakken op uit 3DBAG CityJSON
+// Haalt BAG adres op via PDOK, dan echte 3D dakvlak-data via 3DBAG CityJSON
 
-function berekenDakvlak(vertices) {
-  // vertices: array van [x,y,z]
-  // Normaalvector via cross product
-  const v1 = [vertices[1][0]-vertices[0][0], vertices[1][1]-vertices[0][1], vertices[1][2]-vertices[0][2]];
-  const v2 = [vertices[2][0]-vertices[0][0], vertices[2][1]-vertices[0][1], vertices[2][2]-vertices[0][2]];
-  let normaal = [
-    v1[1]*v2[2] - v1[2]*v2[1],
-    v1[2]*v2[0] - v1[0]*v2[2],
-    v1[0]*v2[1] - v1[1]*v2[0],
-  ];
-  const len = Math.sqrt(normaal[0]**2 + normaal[1]**2 + normaal[2]**2);
-  if (len === 0) return null;
-  normaal = normaal.map(v => v / len);
-  if (normaal[2] < 0) normaal = normaal.map(v => -v);
-
-  const helling = Math.acos(Math.max(-1, Math.min(1, normaal[2]))) * (180 / Math.PI);
-  let azimut = Math.atan2(normaal[0], normaal[1]) * (180 / Math.PI);
-  if (azimut < 0) azimut += 360;
-
-  // Oppervlak via Newell's method (3D polygon area)
-  let oppVec = [0, 0, 0];
-  const n = vertices.length;
+function berekenOppervlak(pts) {
+  // pts: array van [x,y,z] in echte (getransformeerde) coordinaten
+  // Newell's method voor 3D polygon oppervlak
+  let opp = [0, 0, 0];
+  const n = pts.length;
   for (let i = 0; i < n; i++) {
-    const p1 = vertices[i];
-    const p2 = vertices[(i + 1) % n];
-    oppVec[0] += p1[1] * p2[2] - p1[2] * p2[1];
-    oppVec[1] += p1[2] * p2[0] - p1[0] * p2[2];
-    oppVec[2] += p1[0] * p2[1] - p1[1] * p2[0];
+    const p1 = pts[i];
+    const p2 = pts[(i + 1) % n];
+    opp[0] += p1[1] * p2[2] - p1[2] * p2[1];
+    opp[1] += p1[2] * p2[0] - p1[0] * p2[2];
+    opp[2] += p1[0] * p2[1] - p1[1] * p2[0];
   }
-  const oppervlak = Math.sqrt(oppVec[0]**2 + oppVec[1]**2 + oppVec[2]**2) / 2;
-
-  const richtingen = ["Noord","Noordoost","Oost","Zuidoost","Zuid","Zuidwest","West","Noordwest"];
-  const idx = Math.round(azimut / 45) % 8;
-
-  return {
-    oppervlak: Math.round(oppervlak * 10) / 10,
-    azimut: Math.round(azimut * 10) / 10,
-    helling: Math.round(helling * 10) / 10,
-    richting: richtingen[idx],
-  };
+  return Math.sqrt(opp[0] ** 2 + opp[1] ** 2 + opp[2] ** 2) / 2;
 }
 
-function isDakvlak(helling) {
-  // Vloeren/plafonds zijn ~0 of ~180 graden helling, gevels ~90 graden
-  // Dakvlakken: tussen 5 en 85 graden (schuin) OF base zelf vlak (<5) maar als hoogste vlak = plat dak
-  return helling < 85;
+function richtingNaam(azimut) {
+  if (azimut == null) return "Onbekend";
+  const richtingen = ["Noord", "Noordoost", "Oost", "Zuidoost", "Zuid", "Zuidwest", "West", "Noordwest"];
+  const idx = Math.round(azimut / 45) % 8;
+  return richtingen[idx];
+}
+
+function parseCityJsonDakvlakken(cj, gevraagdId) {
+  const vertices = cj.vertices;
+  const transform = cj.transform || { scale: [1, 1, 1], translate: [0, 0, 0] };
+  const { scale, translate } = transform;
+
+  const echteCoord = (idx) => {
+    const v = vertices[idx];
+    return [
+      v[0] * scale[0] + translate[0],
+      v[1] * scale[1] + translate[1],
+      v[2] * scale[2] + translate[2],
+    ];
+  };
+
+  const dakvlakken = [];
+
+  for (const [objId, obj] of Object.entries(cj.CityObjects || {})) {
+    if (obj.type !== "BuildingPart") continue;
+    // Filter op pand-ID indien meerdere panden in de response staan
+    if (gevraagdId && obj.parents && !obj.parents.includes(gevraagdId)) continue;
+
+    for (const geom of obj.geometry || []) {
+      if (geom.lod !== "2.2") continue;
+      const semantics = geom.semantics || {};
+      const surfaces = semantics.surfaces || [];
+      const values = semantics.values || [];
+      const boundaries = geom.boundaries || [];
+
+      if (geom.type !== "Solid") continue;
+
+      for (let shellIdx = 0; shellIdx < boundaries.length; shellIdx++) {
+        const shell = boundaries[shellIdx];
+        const valShell = values[shellIdx] || [];
+
+        for (let faceIdx = 0; faceIdx < shell.length; faceIdx++) {
+          const surfIdx = valShell[faceIdx];
+          if (surfIdx == null || surfIdx >= surfaces.length) continue;
+          const surfInfo = surfaces[surfIdx];
+          if (surfInfo.type !== "RoofSurface") continue;
+
+          const face = shell[faceIdx];
+          const ring = face[0]; // buitenring
+          if (!ring || ring.length < 3) continue;
+
+          const pts = ring.map(echteCoord);
+          const oppervlak = berekenOppervlak(pts);
+
+          if (oppervlak < 0.5) continue; // ruis filteren
+
+          const azimut = surfInfo.b3_azimut ?? null;
+          const helling = surfInfo.b3_hellingshoek ?? null;
+
+          dakvlakken.push({
+            oppervlak: Math.round(oppervlak * 10) / 10,
+            azimut: azimut != null ? Math.round(azimut * 10) / 10 : null,
+            helling: helling != null ? Math.round(helling * 10) / 10 : null,
+            richting: richtingNaam(azimut),
+          });
+        }
+      }
+    }
+  }
+
+  return dakvlakken;
 }
 
 export async function GET(request) {
@@ -63,8 +103,8 @@ export async function GET(request) {
   }
 
   try {
-    // Stap 1: PDOK - adres opzoeken, geeft coordinaten + BAG pand-ID
-    const pdokUrl = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${encodeURIComponent(postcode+" "+huisnummer+toevoeging)}&fq=type:adres&rows=1&fl=*`;
+    // Stap 1: PDOK - adres opzoeken
+    const pdokUrl = `https://api.pdok.nl/bzk/locatieserver/search/v3_1/free?q=${encodeURIComponent(postcode + " " + huisnummer + toevoeging)}&fq=type:adres&rows=1&fl=*`;
     const pdokRes = await fetch(pdokUrl);
     if (!pdokRes.ok) throw new Error("PDOK niet bereikbaar");
     const pdokData = await pdokRes.json();
@@ -78,83 +118,53 @@ export async function GET(request) {
     if (!centroideRD) return Response.json({ error: "Geen coördinaten gevonden" }, { status: 404 });
     const [rdX, rdY] = centroideRD.split(" ").map(parseFloat);
 
-    // Stap 2: 3DBAG tile bepalen en CityJSON ophalen
-    // 3DBAG gebruikt een tegelsysteem; we zoeken via de collection items API
-    const bboxSize = 5;
-    const bbox = `${rdX-bboxSize},${rdY-bboxSize},${rdX+bboxSize},${rdY+bboxSize}`;
-    
-    // 3D BAG OGC API Features endpoint
-    const featuresUrl = `https://api.3dbag.nl/collections/pand/items?bbox=${bbox}&bbox-crs=http://www.opengis.net/def/crs/EPSG/0/28992&f=json&limit=5`;
-    
+    // Stap 2: 3DBAG OGC API Features — bbox rondom het pand
+    const half = 8;
+    const bbox = `${rdX - half},${rdY - half},${rdX + half},${rdY + half}`;
+    const featuresUrl = `https://api.3dbag.nl/collections/pand/items?bbox=${bbox}&limit=5`;
+
     let dakvlakken = [];
-    let bouwjaar = null, bouwlagen = null, pandId = doc.identificatie || null;
-    let databron = "3DBAG (TU Delft)";
+    let pandId = null;
+    let bouwjaar = null;
+    let bouwlagen = null;
+    let daktype = null;
+    let databron = "3DBAG (TU Delft) — per dakvlak";
+
+    const drieRes = await fetch(featuresUrl, { headers: { Accept: "application/json" } });
+    if (drieRes.ok) {
+      const cj = await drieRes.json();
+      const cityObjects = cj.CityObjects || {};
+
+      // Vind het hoofdgebouw (type "Building") het dichtst bij ons punt
+      let beste = null;
+      let besteAfstand = Infinity;
+      for (const [id, obj] of Object.entries(cityObjects)) {
+        if (obj.type !== "Building") continue;
+        // Gebruik attributes als die er zijn, anders skip afstandscheck
+        beste = { id, obj };
+        besteAfstand = 0;
+        break; // bbox is klein genoeg, neem de eerste Building
+      }
+
+      if (beste) {
+        pandId = beste.id;
+        bouwjaar = beste.obj.attributes?.oorspronkelijkbouwjaar || null;
+        bouwlagen = beste.obj.attributes?.b3_bouwlagen || null;
+        daktype = beste.obj.attributes?.b3_dak_type || null;
+
+        dakvlakken = parseCityJsonDakvlakken(cj, pandId);
+      }
+    }
+
     let totaalDak = null;
-
-    try {
-      const featRes = await fetch(featuresUrl, { headers: { Accept: "application/json" } });
-      if (featRes.ok) {
-        const featData = await featRes.json();
-        if (featData.features?.length) {
-          const feature = featData.features[0];
-          pandId = feature.properties?.identificatie || pandId;
-          bouwjaar = feature.properties?.oorspronkelijkbouwjaar || null;
-          bouwlagen = feature.properties?.["b3_bouwlagen"] || null;
-
-          // CityJSON geometry uit feature halen (LoD2.2)
-          const geom = feature.geometry;
-          if (geom && geom.type === "MultiPolygon") {
-            for (const polygon of geom.coordinates) {
-              const ring = polygon[0]; // buitenring
-              if (ring.length >= 4) {
-                const info = berekenDakvlak(ring);
-                if (info && info.oppervlak > 1 && isDakvlak(info.helling)) {
-                  dakvlakken.push(info);
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("3DBAG features fout:", e.message);
-    }
-
-    // Combineer dakvlakken met dezelfde richting+helling (afronding) en filter ruis
     if (dakvlakken.length > 0) {
-      totaalDak = Math.round(dakvlakken.reduce((sum, d) => sum + d.oppervlak, 0) * 10) / 10;
-    }
-
-    // Fallback: oude WFS methode met totalen als geometry niet werkte
-    if (dakvlakken.length === 0) {
-      try {
-        const wfsUrl = `https://data.3dbag.nl/api/BAG3D/v2/wfs?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0&TYPENAMES=BAG3D:lod22&COUNT=1&CQL_FILTER=DWITHIN(wkb_geometry,POINT(${rdX}%20${rdY}),10,meters)&outputFormat=application%2Fjson`;
-        const wfsRes = await fetch(wfsUrl);
-        if (wfsRes.ok) {
-          const wfsData = await wfsRes.json();
-          if (wfsData.features?.length) {
-            const p = wfsData.features[0].properties;
-            const plat = parseFloat(p.b3_opp_dak_plat) || 0;
-            const schuin = parseFloat(p.b3_opp_dak_schuin) || 0;
-            totaalDak = Math.round((plat + schuin) * 10) / 10;
-            bouwlagen = parseInt(p.b3_bouwlagen) || bouwlagen;
-            pandId = p.identificatie || pandId;
-            databron = "3DBAG totaal (geen vlak-detail beschikbaar)";
-            if (plat > 0) dakvlakken.push({ oppervlak: Math.round(plat*10)/10, richting: "Plat dak", azimut: null, helling: 0 });
-            if (schuin > 0) dakvlakken.push({ oppervlak: Math.round(schuin*10)/10, richting: "Schuin (richting onbekend)", azimut: null, helling: null });
-          }
-        }
-      } catch (e) {
-        console.warn("3DBAG WFS fallback fout:", e.message);
-      }
-    }
-
-    // Laatste fallback: schatting
-    if (dakvlakken.length === 0) {
-      databron = "BAG schatting (geen 3DBAG data beschikbaar)";
+      totaalDak = Math.round(dakvlakken.reduce((s, d) => s + d.oppervlak, 0) * 10) / 10;
+    } else {
+      // Fallback: schatting
+      databron = "BAG schatting (geen 3DBAG geometrie gevonden)";
       const go = doc.oppervlakte || 80;
       bouwlagen = bouwlagen || 2;
-      totaalDak = Math.round(go * 1.12);
+      totaalDak = Math.round(go * 1.12 * 10) / 10;
       dakvlakken.push({ oppervlak: totaalDak, richting: "Onbekend (schatting)", azimut: null, helling: null });
     }
 
@@ -166,10 +176,10 @@ export async function GET(request) {
       bouwlagen,
       bouwjaar: bouwjaar || doc.bouwjaar || null,
       gebruiksdoel: doc.gebruiksdoel_gebouw?.[0] || "—",
+      daktype,
       pandId,
       databron,
     });
-
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
   }
