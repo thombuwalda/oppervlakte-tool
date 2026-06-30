@@ -23,9 +23,9 @@ function richtingNaam(azimut) {
   return richtingen[idx];
 }
 
-function parseCityJsonDakvlakken(cj, gevraagdId) {
-  const vertices = cj.vertices;
-  const transform = cj.transform || { scale: [1, 1, 1], translate: [0, 0, 0] };
+function parseCityJsonDakvlakken(feature, gevraagdId) {
+  const vertices = feature.vertices;
+  const transform = feature.metadata?.transform || feature.transform || { scale: [1, 1, 1], translate: [0, 0, 0] };
   const { scale, translate } = transform;
 
   const echteCoord = (idx) => {
@@ -39,7 +39,7 @@ function parseCityJsonDakvlakken(cj, gevraagdId) {
 
   const dakvlakken = [];
 
-  for (const [objId, obj] of Object.entries(cj.CityObjects || {})) {
+  for (const [objId, obj] of Object.entries(feature.CityObjects || {})) {
     if (obj.type !== "BuildingPart") continue;
     // Filter op pand-ID indien meerdere panden in de response staan
     if (gevraagdId && obj.parents && !obj.parents.includes(gevraagdId)) continue;
@@ -132,18 +132,19 @@ export async function GET(request) {
 
     const drieRes = await fetch(featuresUrl, { headers: { Accept: "application/json" } });
     if (drieRes.ok) {
-      const cj = await drieRes.json();
-      const cityObjects = cj.CityObjects || {};
+      const fc = await drieRes.json();
+      const features = fc.features || [];
 
-      // Vind het hoofdgebouw (type "Building") het dichtst bij ons punt
       let beste = null;
-      let besteAfstand = Infinity;
-      for (const [id, obj] of Object.entries(cityObjects)) {
-        if (obj.type !== "Building") continue;
-        // Gebruik attributes als die er zijn, anders skip afstandscheck
-        beste = { id, obj };
-        besteAfstand = 0;
-        break; // bbox is klein genoeg, neem de eerste Building
+
+      for (const feature of features) {
+        const cityObjects = feature.CityObjects || {};
+        for (const [id, obj] of Object.entries(cityObjects)) {
+          if (obj.type !== "Building") continue;
+          beste = { id, obj, feature };
+          break;
+        }
+        if (beste) break;
       }
 
       if (beste) {
@@ -152,7 +153,7 @@ export async function GET(request) {
         bouwlagen = beste.obj.attributes?.b3_bouwlagen || null;
         daktype = beste.obj.attributes?.b3_dak_type || null;
 
-        dakvlakken = parseCityJsonDakvlakken(cj, pandId);
+        dakvlakken = parseCityJsonDakvlakken(beste.feature, pandId);
       }
     }
 
