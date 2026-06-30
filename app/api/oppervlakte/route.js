@@ -23,9 +23,8 @@ function richtingNaam(azimut) {
   return richtingen[idx];
 }
 
-function parseCityJsonDakvlakken(feature, gevraagdId) {
+function parseCityJsonDakvlakken(feature, transform, gevraagdId) {
   const vertices = feature.vertices;
-  const transform = feature.metadata?.transform || feature.transform || { scale: [1, 1, 1], translate: [0, 0, 0] };
   const { scale, translate } = transform;
 
   const echteCoord = (idx) => {
@@ -153,6 +152,8 @@ export async function GET(request) {
       debug.numberReturned = fc.numberReturned ?? null;
       debug.featuresLength = fc.features?.length ?? 0;
       const features = fc.features || [];
+      const transform = fc.metadata?.transform || { scale: [1, 1, 1], translate: [0, 0, 0] };
+      debug.transform = transform;
 
       let beste = null;
 
@@ -176,7 +177,7 @@ export async function GET(request) {
         bouwlagen = beste.obj.attributes?.b3_bouwlagen || null;
         daktype = beste.obj.attributes?.b3_dak_type || null;
 
-        dakvlakken = parseCityJsonDakvlakken(beste.feature, pandId);
+        dakvlakken = parseCityJsonDakvlakken(beste.feature, transform, pandId);
         debug.dakvlakkenGevonden = dakvlakken.length;
       }
     } else {
