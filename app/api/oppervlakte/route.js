@@ -129,23 +129,32 @@ export async function GET(request) {
     let bouwlagen = null;
     let daktype = null;
     let databron = "3DBAG (TU Delft) — per dakvlak";
+    let debug = { featuresUrl, stap: "start" };
 
     const drieRes = await fetch(featuresUrl, { headers: { Accept: "application/json" } });
+    debug.httpStatus = drieRes.status;
+
     if (drieRes.ok) {
       const fc = await drieRes.json();
+      debug.numberReturned = fc.numberReturned ?? null;
+      debug.featuresLength = fc.features?.length ?? 0;
       const features = fc.features || [];
 
       let beste = null;
 
       for (const feature of features) {
         const cityObjects = feature.CityObjects || {};
+        debug.cityObjectTypes = debug.cityObjectTypes || [];
         for (const [id, obj] of Object.entries(cityObjects)) {
+          debug.cityObjectTypes.push(obj.type);
           if (obj.type !== "Building") continue;
           beste = { id, obj, feature };
           break;
         }
         if (beste) break;
       }
+
+      debug.besteGevonden = !!beste;
 
       if (beste) {
         pandId = beste.id;
@@ -154,7 +163,10 @@ export async function GET(request) {
         daktype = beste.obj.attributes?.b3_dak_type || null;
 
         dakvlakken = parseCityJsonDakvlakken(beste.feature, pandId);
+        debug.dakvlakkenGevonden = dakvlakken.length;
       }
+    } else {
+      debug.errorBody = await drieRes.text().catch(() => "kon body niet lezen");
     }
 
     let totaalDak = null;
@@ -180,6 +192,7 @@ export async function GET(request) {
       daktype,
       pandId,
       databron,
+      debug,
     });
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 });
