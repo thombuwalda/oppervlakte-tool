@@ -97,11 +97,6 @@ export default function Page() {
             {data.databron?.includes("schatting")&&(
               <div style={{background:"#FEF3C7",border:"1px solid #FCD34D",borderRadius:8,padding:"10px 14px",fontSize:13,color:"#92400E",marginBottom:20,lineHeight:1.5}}>
                 ⚠️ Geen 3DBAG geometrie beschikbaar — oppervlak is een <strong>schatting</strong>, niet per dakvlak.
-                {data.debug && (
-                  <pre style={{marginTop:8,fontSize:11,whiteSpace:"pre-wrap",background:"#fff",padding:8,borderRadius:6,overflow:"auto",maxHeight:300}}>
-                    {JSON.stringify(data.debug, null, 2)}
-                  </pre>
-                )}
               </div>
             )}
             {data.databron?.includes("geen vlak-detail")&&(
