@@ -114,9 +114,23 @@ export async function GET(request) {
     }
 
     const doc = pdokData.response.docs[0];
-    const centroideRD = doc.centroide_rd;
-    if (!centroideRD) return Response.json({ error: "Geen coördinaten gevonden" }, { status: 404 });
-    const [rdX, rdY] = centroideRD.split(" ").map(parseFloat);
+    let centroideRD = doc.centroide_rd;
+    if (!centroideRD) return Response.json({ error: "Geen coördinaten gevonden", doc }, { status: 404 });
+
+    const matchPoint = centroideRD.match(/POINT\s*\(\s*([\-\d.]+)\s+([\-\d.]+)\s*\)/i);
+    let rdX, rdY;
+    if (matchPoint) {
+      rdX = parseFloat(matchPoint[1]);
+      rdY = parseFloat(matchPoint[2]);
+    } else {
+      const parts = centroideRD.trim().split(/\s+/).map(parseFloat);
+      rdX = parts[0];
+      rdY = parts[1];
+    }
+
+    if (isNaN(rdX) || isNaN(rdY)) {
+      return Response.json({ error: "Kon coördinaten niet parsen", centroideRD }, { status: 500 });
+    }
 
     // Stap 2: 3DBAG OGC API Features — bbox rondom het pand
     const half = 8;
@@ -129,7 +143,7 @@ export async function GET(request) {
     let bouwlagen = null;
     let daktype = null;
     let databron = "3DBAG (TU Delft) — per dakvlak";
-    let debug = { featuresUrl, stap: "start" };
+    let debug = { featuresUrl, stap: "start", ruweCentroideRd: centroideRD, geparseRdX: rdX, geparseRdY: rdY };
 
     const drieRes = await fetch(featuresUrl, { headers: { Accept: "application/json" } });
     debug.httpStatus = drieRes.status;
